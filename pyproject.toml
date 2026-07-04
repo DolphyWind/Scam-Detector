@@ -1,0 +1,13 @@
+[project]
+name = "Scam-Detector"
+version = "1.0.0"
+description = "A discord bot for detecting Mr. Beast scams"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "discord>=2.3.2",
+    "discord-py>=2.7.1",
+    "faiss-cpu>=1.14.3",
+    "pillow>=12.3.0",
+    "transformers>=5.13.0",
+]
