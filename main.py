@@ -1,3 +1,5 @@
+import logging
+
 import discord
 
 from scam_detector import ScamDetector
@@ -8,8 +10,12 @@ from pathlib import Path
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     intents = discord.Intents.default()
-    intents.guild_messages = True
+    intents.message_content = True
     token: str = os.environ["SCAM_DETECTOR_BOT_TOKEN"]
     owner_id: int = int(os.environ["OWNER_ID"])
     model_name: str = os.environ["IMAGE_EMBEDDING_MODEL_NAME"]

@@ -1,19 +1,23 @@
+import asyncio
+import logging
+from enum import Enum
 from io import BytesIO
+from pathlib import Path
+from typing import List
 
 import discord
-from discord import app_commands
-from discord.ext import commands
-from bot_config import BotConfig
-from faiss import IndexFlatIP
 import faiss
-from pathlib import Path
-from transformers import pipeline
 import numpy as np
 import numpy.typing as npt
+from discord import app_commands
+from discord.ext import commands
+from faiss import IndexFlatIP
 from PIL import Image
-from enum import Enum
-from typing import List
-import asyncio
+from transformers import pipeline
+
+from bot_config import BotConfig
+
+logger = logging.getLogger(__name__)
 
 
 # I do not recommend using BAN action automatically since models are prone to error
@@ -50,11 +54,17 @@ class AppCommandsCog(commands.Cog):
                 "You need to be the owner of this bot to use this command!",
                 ephemeral=True,
             )
+            return
 
+        logger.info(f"Registering image {image.filename} from user {interaction.user.id}")
         data: bytes = await image.read()
         img: Image.Image = Image.open(BytesIO(data))
         embedding: npt.NDArray = await self.bot.embed([img])
         self.bot.image_index.add(embedding)
+        await interaction.response.send_message(
+            "Successfully registered the image",
+            ephemeral=True,
+        )
 
 
 class ScamDetector(commands.Bot):
@@ -65,23 +75,25 @@ class ScamDetector(commands.Bot):
         bot_config: BotConfig,
     ) -> None:
         super().__init__(command_prefix=command_prefix, intents=intents)
-        self.command_tree = app_commands.CommandTree(self)
 
-        self.owner: int = bot_config.owner_id
+        self.owner_id: int = bot_config.owner_id
         self.model_name: str = bot_config.model_name
         self.index_path: Path = Path(bot_config.index_path)
         self.db_path: Path = Path(bot_config.db_path)
         self.match_threshold: float = bot_config.match_threshold
 
+        logger.info(f"Loading model {self.model_name}")
         self.pipe = pipeline(
             task="image-feature-extraction",
             model=self.model_name,
         )
 
         if self.index_path.exists():
+            logger.info(f"Loading existing index from {self.index_path}")
             self.image_index: IndexFlatIP = faiss.read_index(str(self.index_path))
         else:
-            self.image_index: IndexFlatIP = IndexFlatL2(d=self.pipe.model.config.hidden_size)
+            logger.info(f"Creating new index with dimension {self.pipe.model.config.hidden_size}")
+            self.image_index: IndexFlatIP = IndexFlatIP(self.pipe.model.config.hidden_size)
 
     async def on_message(
         self,
@@ -98,28 +110,33 @@ class ScamDetector(commands.Bot):
         if not image_attachments:
             return
 
-        image_data: List[bytes] = await asyncio.gather(*[im.read for im in image_attachments])
+        logger.info(f"Processing {len(image_attachments)} image(s) from message {message.id}")
+        image_data: List[bytes] = await asyncio.gather(*[im.read() for im in image_attachments])
         images: List[Image.Image] = [Image.open(BytesIO(data)) for data in image_data]
 
         queries: npt.NDArray = await self.embed(images)
-        scores, _ = self.image_index.search(queries, k=5)
-        scores = [s[0] for s in scores if s[0] > self.match_threshold]
+        raw_scores, _ = self.image_index.search(queries, k=5)
+        raw_scores = [s[0] for s in raw_scores]
+        scores = [s for s in raw_scores if s > self.match_threshold]
 
-        if scores.__len__() > 0:
+        if scores:
+            logger.warning(f"Match detected (scores={[f'{s:.4f}' for s in scores]}) in message {message.id}")
             await message.channel.send("Detected!")
+        else:
+            logger.info(f"No matches found in message {message.id} (scores={[f'{s:.4f}' for s in raw_scores]})")
 
     async def embed(self, images: List[Image.Image]) -> npt.NDArray:
-        embeds = self.pipe(
-            images,
-            return_tensor="np",
-        )
-
-        return faiss.normalize_L2(embeds)
+        raw = np.asarray(self.pipe(images))
+        embeds = np.ascontiguousarray(raw[:, 0, 0, :], dtype=np.float32)
+        faiss.normalize_L2(embeds)
+        return embeds
 
     async def setup_hook(self) -> None:
+        logger.info(f"Bot logged in as {self.user}")
         await self.add_cog(AppCommandsCog(self))
-        await self.command_tree.sync()
+        await self.tree.sync()
 
     async def close(self) -> None:
+        logger.info(f"Saving index to {self.index_path}")
         faiss.write_index(self.image_index, str(self.index_path))
         await super().close()
