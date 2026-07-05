@@ -11,4 +11,5 @@ COPY scam_detector.py .
 COPY action.py .
 
 RUN ["uv", "sync"]
+STOPSIGNAL SIGINT
 CMD ["uv", "run", "main.py"]
