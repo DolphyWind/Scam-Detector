@@ -57,12 +57,23 @@ def _format_duration(mins: int) -> str:
     return " ".join(parts)
 
 
-def _extract_id(raw: str) -> Optional[int]:
+def _extract_user_id(raw: str) -> Optional[int]:
     stripped = raw.strip()
-    for prefix, suffix in [("<@!", ">"), ("<@&", ">"), ("<#", ">"), ("<@", ">")]:
+    for prefix, suffix in [("<@!", ">"), ("<@&", ">"), ("<@", ">")]:
         if stripped.startswith(prefix) and stripped.endswith(suffix):
             stripped = stripped[len(prefix):-len(suffix)]
             break
+    try:
+        return int(stripped)
+    except (ValueError, TypeError):
+        return None
+
+
+def _extract_channel_id(raw: str) -> Optional[int]:
+    stripped = raw.strip()
+    if stripped.startswith("<#") and stripped.endswith(">"):
+        stripped = stripped[2:-1]
+
     try:
         return int(stripped)
     except (ValueError, TypeError):
@@ -76,12 +87,11 @@ class Action(ABC):
         self.priority: int = 0
         self.is_singleton: bool = True
         self.id: int = 0
-        self._order: int = 0
         self.cooldown_seconds: int = 0
         self._next_allowed: float = 0
 
     def __lt__(self, other: "Action") -> bool:
-        return (self.priority, self._order) < (other.priority, other._order)
+        return self.priority < other.priority
 
     # Take an action and return message(s). ActionList will concatenate these and send it as a single message.
     async def act(
@@ -161,7 +171,7 @@ class TimeoutAction(Action):
 # param = user ID or role ID to ping (int)
 class PingAction(Action):
     def __init__(self, param: Optional[Any] = None) -> None:
-        parsed: Optional[int] = _extract_id(param) if param is not None else None
+        parsed: Optional[int] = _extract_user_id(param) if param is not None else None
         super().__init__(parsed)
         self.priority: int = 10
         self.is_singleton: bool = False
@@ -193,7 +203,7 @@ class PingAction(Action):
 # param = archive channel ID (int)
 class ArchiveAction(Action):
     def __init__(self, param: Optional[Any] = None) -> None:
-        parsed: Optional[int] = _extract_id(param) if param is not None else None
+        parsed: Optional[int] = _extract_channel_id(param) if param is not None else None
         super().__init__(parsed)
         self.priority: int = 20
         self.is_singleton: bool = False
@@ -206,6 +216,7 @@ class ArchiveAction(Action):
         message: discord.Message,
     ) -> Optional[str]:
         logger.info(f"Archiving message {message.id} from {message.author}.")
+        assert type(self.param) is int, "Channel id must be an integer"
         channel_id: int = self.param
         channel = bot.get_channel(channel_id)
 
@@ -246,7 +257,6 @@ class ActionList():
     def __init__(self) -> None:
         self.action_queue: List[Action] = []
         self._next_id: int = 1
-        self._order: int = 0
 
     def add_action(self, action: Action) -> Optional[str]:
         for item in self.action_queue:
@@ -256,8 +266,6 @@ class ActionList():
                 return "Action already exists!"
         action.id = self._next_id
         self._next_id += 1
-        action._order = self._order
-        self._order += 1
         bisect.insort(self.action_queue, action)
 
     def remove_action(self, action_id: int) -> bool:

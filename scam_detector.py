@@ -52,19 +52,28 @@ class AppCommandsCog(commands.Cog):
             )
             return
 
-        if interaction.user.id != self.bot.owner_id:
+        if interaction.user.id != self.bot._owner_id:
             await interaction.response.send_message(
                 "You need to be the owner of this bot to use this command!",
                 ephemeral=True,
             )
             return
 
+        await interaction.response.defer()
         logger.info(f"Registering image {image.filename} from user {interaction.user.id}")
         data: bytes = await image.read()
-        img: Image.Image = Image.open(BytesIO(data))
+        try:
+            img: Image.Image = Image.open(BytesIO(data))
+        except:
+            await interaction.followup.send(
+                "Error while processing the image file!",
+                ephemeral=True,
+            )
+            return
         embedding: npt.NDArray = await self.bot.embed([img])
         self.bot.image_index.add(embedding)
-        await interaction.response.send_message(
+        await self.bot.save_index()
+        await interaction.followup.send(
             "Successfully registered the image",
             ephemeral=True,
         )
@@ -74,20 +83,21 @@ class AppCommandsCog(commands.Cog):
     async def _check_mod(
         self,
         interaction: discord.Interaction,
-    ) -> bool:
-        if interaction.guild_id is None:
+    ) -> Optional[int]:
+        """Returns the guild ID if the user is a mod in a server, else None (and replies)."""
+        if interaction.guild_id is None or not isinstance(interaction.user, discord.Member):
             await interaction.response.send_message(
                 "This command must be used in a server.",
                 ephemeral=True,
             )
-            return False
+            return None
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message(
                 "You need to be a moderator of this server to use this command!",
                 ephemeral=True,
             )
-            return False
-        return True
+            return None
+        return interaction.guild_id
 
     @actions.command(
         name="add",
@@ -111,10 +121,11 @@ class AppCommandsCog(commands.Cog):
         action_type: str,
         param: Optional[str] = None,
     ) -> None:
-        if not await self._check_mod(interaction):
+        guild_id = await self._check_mod(interaction)
+        if guild_id is None:
             return
 
-        action: Action | None = None
+        action: Optional[Action] = None
         match action_type:
             case "ban":
                 action = BanAction(param)
@@ -127,11 +138,17 @@ class AppCommandsCog(commands.Cog):
                     await interaction.response.send_message("Ping action requires a user/role ID or mention.", ephemeral=True)
                     return
                 action = PingAction(param)
+                if action.param is None:
+                    await interaction.response.send_message(f"Couldn't parse a user/role ID from `{param}`.", ephemeral=True)
+                    return
             case "archive":
                 if param is None:
                     await interaction.response.send_message("Archive action requires a channel ID or mention.", ephemeral=True)
                     return
                 action = ArchiveAction(param)
+                if action.param is None:
+                    await interaction.response.send_message(f"Couldn't parse a channel ID from `{param}`.", ephemeral=True)
+                    return
             case "delete":
                 action = DeleteAction(param)
 
@@ -142,7 +159,7 @@ class AppCommandsCog(commands.Cog):
             )
             return
 
-        result = await self.bot.add_action(interaction.guild_id, action)
+        result = await self.bot.add_action(guild_id, action)
         if result is not None:
             await interaction.response.send_message(result, ephemeral=True)
             return
@@ -186,10 +203,11 @@ class AppCommandsCog(commands.Cog):
         interaction: discord.Interaction,
         action_id: int,
     ) -> None:
-        if not await self._check_mod(interaction):
+        guild_id = await self._check_mod(interaction)
+        if guild_id is None:
             return
 
-        if not await self.bot.remove_action(interaction.guild_id, action_id):
+        if not await self.bot.remove_action(guild_id, action_id):
             await interaction.response.send_message(
                 f"No action with ID `{action_id}`.",
                 ephemeral=True,
@@ -206,10 +224,11 @@ class AppCommandsCog(commands.Cog):
         self,
         interaction: discord.Interaction,
     ) -> None:
-        if not await self._check_mod(interaction):
+        guild_id = await self._check_mod(interaction)
+        if guild_id is None:
             return
 
-        guild_actions = self.bot.actions_map.get(interaction.guild_id)
+        guild_actions = self.bot.actions_map.get(guild_id)
         if guild_actions is None or not guild_actions.action_queue:
             await interaction.response.send_message(
                 "No actions configured for this server.",
@@ -253,10 +272,11 @@ class AppCommandsCog(commands.Cog):
         self,
         interaction: discord.Interaction,
     ) -> None:
-        if not await self._check_mod(interaction):
+        guild_id = await self._check_mod(interaction)
+        if guild_id is None:
             return
 
-        await self.bot.clear_actions(interaction.guild_id)
+        await self.bot.clear_actions(guild_id)
         await interaction.response.send_message(
             "Cleared all actions for this server.",
             ephemeral=True,
@@ -272,7 +292,7 @@ class ScamDetector(commands.Bot):
     ) -> None:
         super().__init__(command_prefix=command_prefix, intents=intents)
 
-        self.owner_id: int = bot_config.owner_id
+        self._owner_id: int = bot_config.owner_id
         self.model_name: str = bot_config.model_name
         self.index_path: Path = Path(bot_config.index_path)
         self.db_path: Path = Path(bot_config.db_path)
@@ -294,6 +314,8 @@ class ScamDetector(commands.Bot):
         if message.author.bot:
             return
         if message.guild is None:
+            return
+        if self.image_index.ntotal == 0:
             return
 
         image_attachments: List[discord.Attachment] = []
