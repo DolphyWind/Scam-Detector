@@ -13,6 +13,7 @@ from faiss import IndexFlatIP
 import numpy as np
 import numpy.typing as npt
 from transformers import pipeline
+import aiosqlite as sql
 
 from action import (
     Action,
@@ -135,13 +136,10 @@ class AppCommandsCog(commands.Cog):
             )
             return
 
-        guild_actions = self.bot.actions_map.setdefault(interaction.guild_id, ActionList())
-        result = guild_actions.add_action(action)
-        if result:
+        result = await self.bot.add_action(interaction.guild_id, action)
+        if result is not None:
             await interaction.response.send_message(result, ephemeral=True)
             return
-
-        await self.bot.save_actions()
         if type(action) is BanAction:
             desc = "Ban the message author"
         elif type(action) is KickAction:
@@ -185,15 +183,13 @@ class AppCommandsCog(commands.Cog):
         if not await self._check_mod(interaction):
             return
 
-        guild_actions = self.bot.actions_map.get(interaction.guild_id)
-        if guild_actions is None or not guild_actions.remove_action(action_id):
+        if not await self.bot.remove_action(interaction.guild_id, action_id):
             await interaction.response.send_message(
                 f"No action with ID `{action_id}`.",
                 ephemeral=True,
             )
             return
 
-        await self.bot.save_actions()
         await interaction.response.send_message(
             f"Removed action ID=`{action_id}`.",
             ephemeral=True,
@@ -254,8 +250,7 @@ class AppCommandsCog(commands.Cog):
         if not await self._check_mod(interaction):
             return
 
-        self.bot.actions_map.pop(interaction.guild_id, None)
-        await self.bot.save_actions()
+        await self.bot.clear_actions(interaction.guild_id)
         await interaction.response.send_message(
             "Cleared all actions for this server.",
             ephemeral=True,
@@ -340,7 +335,79 @@ class ScamDetector(commands.Bot):
         faiss.write_index(self.image_index, str(self.index_path))
 
     async def load_actions(self) -> None:
-        pass
+        async with sql.connect(self.db_path) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS Config (
+                    guild_id INTEGER NOT NULL,
+                    action_id INTEGER NOT NULL,
+                    action_name_id TEXT NOT NULL,
+                    param TEXT,
+                    PRIMARY KEY (guild_id, action_id)
+                )
+            """)
+            await db.commit()
+            cursor = await db.execute("SELECT DISTINCT guild_id FROM Config ORDER BY guild_id")
+            guild_ids = [r[0] for r in await cursor.fetchall()]
+
+        ACTION_CLASSES = {
+            "BanAction": BanAction,
+            "KickAction": KickAction,
+            "TimeoutAction": TimeoutAction,
+            "PingAction": PingAction,
+            "ArchiveAction": ArchiveAction,
+            "DeleteAction": DeleteAction,
+        }
+
+        for guild_id in guild_ids:
+            async with sql.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT action_id, action_name_id, param FROM Config WHERE guild_id = ? ORDER BY action_id",
+                    (guild_id,),
+                )
+                rows = await cursor.fetchall()
+
+            action_list = ActionList()
+            max_id = 0
+            for action_id, name_id, param_str in rows:
+                cls = ACTION_CLASSES.get(name_id)
+                if cls is None:
+                    continue
+                action = cls(param_str)
+                action_list.add_action(action)
+                action.id = action_id
+                max_id = max(max_id, action_id)
+            action_list._next_id = max_id + 1
+            self.actions_map[guild_id] = action_list
+
+    async def add_action(self, guild_id: int, action: Action) -> Optional[str]:
+        guild_actions = self.actions_map.setdefault(guild_id, ActionList())
+        result = guild_actions.add_action(action)
+        if result is not None:
+            return result
+        async with sql.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO Config (guild_id, action_id, action_name_id, param) VALUES (?, ?, ?, ?)",
+                (guild_id, action.id, action.__class__.__name__, str(action.param) if action.param is not None else None),
+            )
+            await db.commit()
+
+    async def remove_action(self, guild_id: int, action_id: int) -> bool:
+        guild_actions = self.actions_map.get(guild_id)
+        if guild_actions is None or not guild_actions.remove_action(action_id):
+            return False
+        async with sql.connect(self.db_path) as db:
+            await db.execute(
+                "DELETE FROM Config WHERE guild_id = ? AND action_id = ?",
+                (guild_id, action_id),
+            )
+            await db.commit()
+        return True
+
+    async def clear_actions(self, guild_id: int) -> None:
+        self.actions_map.pop(guild_id, None)
+        async with sql.connect(self.db_path) as db:
+            await db.execute("DELETE FROM Config WHERE guild_id = ?", (guild_id,))
+            await db.commit()
 
     async def save_actions(self) -> None:
         pass

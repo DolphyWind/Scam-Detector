@@ -5,6 +5,7 @@ description = "A discord bot for detecting Mr. Beast scams"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "aiosqlite>=0.22.1",
     "discord>=2.3.2",
     "discord-py>=2.7.1",
     "faiss-cpu>=1.14.3",
