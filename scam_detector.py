@@ -95,7 +95,7 @@ class AppCommandsCog(commands.Cog):
     )
     @app_commands.describe(
         action_type="The type of action to add",
-        param="Optional parameter as a number (minutes for timeout, ID for ping/archive)",
+        param="Optional parameter. (minutes for timeout, ID/mention for ping/archive)",
     )
     @app_commands.choices(action_type=[
         app_commands.Choice(name="ban", value="ban"),
@@ -123,8 +123,14 @@ class AppCommandsCog(commands.Cog):
             case "timeout":
                 action = TimeoutAction(param)
             case "ping":
+                if param is None:
+                    await interaction.response.send_message("Ping action requires a user/role ID or mention.", ephemeral=True)
+                    return
                 action = PingAction(param)
             case "archive":
+                if param is None:
+                    await interaction.response.send_message("Archive action requires a channel ID or mention.", ephemeral=True)
+                    return
                 action = ArchiveAction(param)
             case "delete":
                 action = DeleteAction(param)
