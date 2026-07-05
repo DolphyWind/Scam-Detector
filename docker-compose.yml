@@ -1,0 +1,10 @@
+services:
+  scam_detector:
+    build: .
+    container_name: scam_detector
+    env_file: .env
+    volumes:
+      - data:/app/data
+
+volumes:
+  data:
