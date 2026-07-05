@@ -8,6 +8,7 @@ COPY uv.lock .
 COPY main.py .
 COPY bot_config.py .
 COPY scam_detector.py .
+COPY action.py .
 
 RUN ["uv", "sync"]
 CMD ["uv", "run", "main.py"]
