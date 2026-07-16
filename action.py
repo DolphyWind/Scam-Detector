@@ -228,7 +228,7 @@ class ArchiveAction(Action):
             logger.warning(f"Missing send_messages permission in archive channel {channel}")
             return "I don't have permission to send messages in the archive channel."
 
-        await channel.send(f"**Archived message from {message.author}**\n{message.content}")
+        await channel.send(f"**Archived message from {message.author.mention} (ID: {message.author.id})**\n{message.content}")
         for attachment in message.attachments:
             await channel.send(attachment.url)
 
