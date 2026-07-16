@@ -257,6 +257,8 @@ class ActionList():
     def __init__(self) -> None:
         self.action_queue: List[Action] = []
         self._next_id: int = 1
+        self._next_allowed_message: float = 0
+        self._message_cooldown_seconds: float = 10
 
     def add_action(self, action: Action) -> Optional[str]:
         for item in self.action_queue:
@@ -293,5 +295,6 @@ class ActionList():
             if action.cooldown_seconds:
                 action._next_allowed = now + action.cooldown_seconds
 
-        if msgs:
+        if msgs and now > self._next_allowed_message:
+            self._next_allowed_message = now + self._message_cooldown_seconds
             return "\n".join(msgs)
