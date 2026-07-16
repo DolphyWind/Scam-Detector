@@ -161,7 +161,7 @@ class TimeoutAction(Action):
     ) -> Optional[str]:
         duration = datetime.timedelta(minutes=self.param if self.param is not None else 60)
         logger.info(f"Timing out {message.author} for {duration}.")
-        if not message.guild.me.guild_permissions.timeout_members:
+        if not message.guild.me.guild_permissions.moderate_members:
             logger.warning(f"Missing moderate_members permission in guild {message.guild}")
             return "I don't have permission to timeout members."
 
