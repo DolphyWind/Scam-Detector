@@ -228,9 +228,10 @@ class ArchiveAction(Action):
             logger.warning(f"Missing send_messages permission in archive channel {channel}")
             return "I don't have permission to send messages in the archive channel."
 
-        await channel.send(f"**Archived message from {message.author.mention} (ID: {message.author.id})**\n{message.content}")
+        final_msg: str = f"**Archived message from {message.author.mention} (ID: {message.author.id})**\n{message.content}\n\n"
         for attachment in message.attachments:
-            await channel.send(attachment.url)
+            final_msg += f"{attachment.url}\n"
+        await channel.send(final_msg)
 
 
 class DeleteAction(Action):
@@ -287,13 +288,13 @@ class ActionList():
         for action in self.action_queue:
             if now < action._next_allowed:
                 continue
+            if action.cooldown_seconds:
+                action._next_allowed = now + action.cooldown_seconds
             try:
                 if msg := await action.act(bot, message):
                     msgs.append(msg)
             except Exception as e:
                 msgs.append(f"An error occured when performing {action.__class__.__name__}: {e}")
-            if action.cooldown_seconds:
-                action._next_allowed = now + action.cooldown_seconds
 
         if msgs and now > self._next_allowed_message:
             self._next_allowed_message = now + self._message_cooldown_seconds
