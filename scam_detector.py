@@ -413,7 +413,7 @@ class ScamDetector(commands.Bot):
         }
 
         for guild_id in guild_ids:
-            async with cur.execute('''
+            async with self.conn.execute('''
                 SELECT action_id, action_name_id, param FROM Config WHERE guild_id = ? ORDER BY action_id
             ''', (guild_id,),
             ) as cur:
