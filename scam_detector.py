@@ -64,7 +64,7 @@ class AppCommandsCog(commands.Cog):
         data: bytes = await image.read()
         try:
             img: Image.Image = Image.open(BytesIO(data))
-        except:
+        except Exception:
             await interaction.followup.send(
                 "Error while processing the image file!",
                 ephemeral=True,
@@ -135,19 +135,31 @@ class AppCommandsCog(commands.Cog):
                 action = TimeoutAction(param)
             case "ping":
                 if param is None:
-                    await interaction.response.send_message("Ping action requires a user/role ID or mention.", ephemeral=True)
+                    await interaction.response.send_message(
+                        "Ping action requires a user/role ID or mention.",
+                        ephemeral=True,
+                    )
                     return
                 action = PingAction(param)
                 if action.param is None:
-                    await interaction.response.send_message(f"Couldn't parse a user/role ID from `{param}`.", ephemeral=True)
+                    await interaction.response.send_message(
+                        f"Couldn't parse a user/role ID from `{param}`.",
+                        ephemeral=True,
+                    )
                     return
             case "archive":
                 if param is None:
-                    await interaction.response.send_message("Archive action requires a channel ID or mention.", ephemeral=True)
+                    await interaction.response.send_message(
+                        "Archive action requires a channel ID or mention.",
+                        ephemeral=True,
+                    )
                     return
                 action = ArchiveAction(param)
                 if action.param is None:
-                    await interaction.response.send_message(f"Couldn't parse a channel ID from `{param}`.", ephemeral=True)
+                    await interaction.response.send_message(
+                        f"Couldn't parse a channel ID from `{param}`.",
+                        ephemeral=True,
+                    )
                     return
             case "delete":
                 action = DeleteAction(param)
@@ -298,6 +310,8 @@ class ScamDetector(commands.Bot):
         self.db_path: Path = Path(bot_config.db_path)
         self.match_threshold: float = bot_config.match_threshold
 
+        self.conn: sql.Connection
+
         logger.info(f"Loading model {self.model_name}")
         self.pipe = pipeline(
             task="image-feature-extraction",
@@ -345,11 +359,21 @@ class ScamDetector(commands.Bot):
         else:
             logger.info(f"No matches found in message {message.id} (scores={[f'{s:.4f}' for s in raw_scores]})")
 
-    async def embed(self, images: List[Image.Image]) -> npt.NDArray:
+    async def embed(
+        self,
+        images: List[Image.Image],
+    ) -> npt.NDArray:
         raw = np.asarray(self.pipe(images))
         embeds = np.ascontiguousarray(raw[:, 0, 0, :], dtype=np.float32)
         faiss.normalize_L2(embeds)
         return embeds
+
+    async def connect_to_db(self) -> None:
+        conn: Optional[sql.Connection] = await sql.connect(str(self.db_path))
+        if conn is None:
+            raise RuntimeError("Cannot connect to the database!")
+
+        self.conn = conn
 
     async def load_index(self) -> None:
         if self.index_path.exists():
@@ -363,19 +387,21 @@ class ScamDetector(commands.Bot):
         faiss.write_index(self.image_index, str(self.index_path))
 
     async def load_actions(self) -> None:
-        async with sql.connect(self.db_path) as db:
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS Config (
-                    guild_id INTEGER NOT NULL,
-                    action_id INTEGER NOT NULL,
-                    action_name_id TEXT NOT NULL,
-                    param TEXT,
-                    PRIMARY KEY (guild_id, action_id)
-                )
-            """)
-            await db.commit()
-            cursor = await db.execute("SELECT DISTINCT guild_id FROM Config ORDER BY guild_id")
-            guild_ids = [r[0] for r in await cursor.fetchall()]
+        await self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS Config (
+                guild_id INTEGER NOT NULL,
+                action_id INTEGER NOT NULL,
+                action_name_id TEXT NOT NULL,
+                param TEXT,
+                PRIMARY KEY (guild_id, action_id)
+            )
+        ''')
+        await self.conn.commit()
+
+        async with self.conn.execute('''
+            SELECT DISTINCT guild_id FROM Config ORDER BY guild_id
+        ''') as cur:
+            guild_ids = [r[0] for r in await cur.fetchall()]
 
         ACTION_CLASSES = {
             "BanAction": BanAction,
@@ -387,12 +413,11 @@ class ScamDetector(commands.Bot):
         }
 
         for guild_id in guild_ids:
-            async with sql.connect(self.db_path) as db:
-                cursor = await db.execute(
-                    "SELECT action_id, action_name_id, param FROM Config WHERE guild_id = ? ORDER BY action_id",
-                    (guild_id,),
-                )
-                rows = await cursor.fetchall()
+            async with cur.execute('''
+                SELECT action_id, action_name_id, param FROM Config WHERE guild_id = ? ORDER BY action_id
+            ''', (guild_id,),
+            ) as cur:
+                rows = await cur.fetchall()
 
             action_list = ActionList()
             max_id = 0
@@ -407,48 +432,68 @@ class ScamDetector(commands.Bot):
             action_list._next_id = max_id + 1
             self.actions_map[guild_id] = action_list
 
-    async def add_action(self, guild_id: int, action: Action) -> Optional[str]:
+    async def add_action(
+        self,
+        guild_id: int,
+        action: Action,
+    ) -> Optional[str]:
         guild_actions = self.actions_map.setdefault(guild_id, ActionList())
         result = guild_actions.add_action(action)
         if result is not None:
             return result
-        async with sql.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT INTO Config (guild_id, action_id, action_name_id, param) VALUES (?, ?, ?, ?)",
-                (guild_id, action.id, action.__class__.__name__, str(action.param) if action.param is not None else None),
-            )
-            await db.commit()
 
-    async def remove_action(self, guild_id: int, action_id: int) -> bool:
+        action_param_str: Optional[str] = str(action.param) if action.param is not None else None
+        await self.conn.execute('''
+            INSERT INTO Config (guild_id, action_id, action_name_id, param) VALUES (?, ?, ?, ?)
+        ''', (guild_id, action.id, action.__class__.__name__, action_param_str),
+        )
+        await self.conn.commit()
+
+    async def remove_action(
+        self,
+        guild_id: int,
+        action_id: int,
+    ) -> bool:
         guild_actions = self.actions_map.get(guild_id)
         if guild_actions is None or not guild_actions.remove_action(action_id):
             return False
-        async with sql.connect(self.db_path) as db:
-            await db.execute(
-                "DELETE FROM Config WHERE guild_id = ? AND action_id = ?",
-                (guild_id, action_id),
-            )
-            await db.commit()
+
+        await self.conn.execute('''
+            DELETE FROM Config WHERE guild_id = ? AND action_id = ?
+        ''', (guild_id, action_id),
+        )
+        await self.conn.commit()
         return True
 
-    async def clear_actions(self, guild_id: int) -> None:
+    async def clear_actions(
+        self,
+        guild_id: int,
+    ) -> None:
         self.actions_map.pop(guild_id, None)
-        async with sql.connect(self.db_path) as db:
-            await db.execute("DELETE FROM Config WHERE guild_id = ?", (guild_id,))
-            await db.commit()
+        await self.conn.execute('''
+            DELETE FROM Config WHERE guild_id = ?
+        ''', (guild_id,))
+        await self.conn.commit()
 
-    async def save_actions(self) -> None:
-        pass
+    async def close_db_connection(self) -> None:
+        self.conn.close()
 
     async def setup_hook(self) -> None:
         logger.info(f"Bot logged in as {self.user}")
+        await self.connect_to_db()
         await self.load_index()
         await self.load_actions()
         await self.add_cog(AppCommandsCog(self))
         await self.tree.sync()
 
+    async def on_guild_remove(
+        self,
+        guild: discord.Guild,
+    ) -> None:
+        await self.clear_actions(guild.id)
+
     async def close(self) -> None:
         logger.info(f"Saving index to {self.index_path}")
-        await self.save_actions()
+        await self.close_db_connection()
         await self.save_index()
         await super().close()

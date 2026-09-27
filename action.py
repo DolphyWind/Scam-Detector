@@ -23,8 +23,10 @@ def _parse_duration(raw: str) -> Optional[int]:
         while remaining and remaining[0].isdigit():
             buf += remaining[0]
             remaining = remaining[1:]
+
         if not buf:
             return None
+
         n = int(buf)
         if remaining and remaining[0] == "d":
             total += n * 1440
@@ -81,7 +83,10 @@ def _extract_channel_id(raw: str) -> Optional[int]:
 
 
 class Action(ABC):
-    def __init__(self, param: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        param: Optional[Any] = None,
+    ) -> None:
         super().__init__()
         self.param: Optional[Any] = param
         self.priority: int = 0
@@ -103,7 +108,10 @@ class Action(ABC):
 
 
 class BanAction(Action):
-    def __init__(self, param: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        param: Optional[Any] = None,
+    ) -> None:
         super().__init__()
         self.priority: int = 60
         self.is_singleton: bool = True
@@ -146,7 +154,10 @@ class KickAction(Action):
 
 # param = duration in minutes (int, default 60)
 class TimeoutAction(Action):
-    def __init__(self, param: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        param: Optional[Any] = None,
+    ) -> None:
         parsed: Optional[int] = _parse_duration(param) if param is not None else None
         super().__init__(parsed)
         self.priority: int = 40
@@ -170,7 +181,10 @@ class TimeoutAction(Action):
 
 # param = user ID or role ID to ping (int)
 class PingAction(Action):
-    def __init__(self, param: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        param: Optional[Any] = None,
+    ) -> None:
         parsed: Optional[int] = _extract_user_id(param) if param is not None else None
         super().__init__(parsed)
         self.priority: int = 10
@@ -202,7 +216,10 @@ class PingAction(Action):
 
 # param = archive channel ID (int)
 class ArchiveAction(Action):
-    def __init__(self, param: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        param: Optional[Any] = None,
+    ) -> None:
         parsed: Optional[int] = _extract_channel_id(param) if param is not None else None
         super().__init__(parsed)
         self.priority: int = 20
@@ -235,7 +252,10 @@ class ArchiveAction(Action):
 
 
 class DeleteAction(Action):
-    def __init__(self, param: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        param: Optional[Any] = None,
+    ) -> None:
         super().__init__()
         self.priority: int = 30
         self.is_singleton: bool = True
@@ -261,7 +281,10 @@ class ActionList():
         self._next_allowed_message: float = 0
         self._message_cooldown_seconds: float = 10
 
-    def add_action(self, action: Action) -> Optional[str]:
+    def add_action(
+        self,
+        action: Action,
+    ) -> Optional[str]:
         for item in self.action_queue:
             if not item.is_singleton:
                 continue
@@ -271,7 +294,10 @@ class ActionList():
         self._next_id += 1
         bisect.insort(self.action_queue, action)
 
-    def remove_action(self, action_id: int) -> bool:
+    def remove_action(
+        self,
+        action_id: int,
+    ) -> bool:
         for i, a in enumerate(self.action_queue):
             if a.id == action_id:
                 self.action_queue.pop(i)
